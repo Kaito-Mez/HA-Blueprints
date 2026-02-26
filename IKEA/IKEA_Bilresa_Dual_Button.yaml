@@ -8,6 +8,7 @@ blueprint:
 
     Double Press Brightness Control: Adjusts brightness by a set percentage with each double press.
     Press and Hold Brightness Control: Smoothly ramps brightness up or down while the button is held. (The light must support transitions)
+  source_url: https://github.com/Kaito-Mez/HA-Blueprints/blob/main/IKEA/IKEA_Bilresa_Dual_Button.yaml
   domain: automation
   input:
     remote_up:
