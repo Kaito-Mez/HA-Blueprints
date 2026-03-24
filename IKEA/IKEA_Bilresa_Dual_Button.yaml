@@ -182,19 +182,25 @@ triggers:
   - trigger: state
     entity_id: !input remote_up
     id: press_up
+    not_from: unavailable
+    not_to: unavailable
   - trigger: state
     entity_id: !input remote_down
     id: press_down
+    not_from: unavailable
+    not_to: unavailable
   - trigger: state
     entity_id: !input remote_up
     attribute: event_type
     to: long_press
     id: hold_up
+    not_from: unavailable
   - trigger: state
     entity_id: !input remote_down
     attribute: event_type
     to: long_press
     id: hold_down
+    not_from: unavailable
 
 mode: single # If the automation is triggered again while already running, the new trigger is ignored.
 max_exceeded: silent # Dont Log warning when the new trigger is dropped.
