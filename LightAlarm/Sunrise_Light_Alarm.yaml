@@ -1,0 +1,211 @@
+# Based on "Alarm Light" by r3mcos3
+# https://github.com/r3mcos3/blueprints/blob/main/alarm_light/alarm_light.yaml
+# Original work licensed under MIT
+blueprint:
+  name: "Sunrise Light Alarm"
+  description: |
+    Sunrise Light Alarm
+
+    Based on "Alarm Light" by r3mcos3
+    https://github.com/r3mcos3/blueprints/blob/main/alarm_light/alarm_light.yaml
+  domain: automation
+  input:
+    alarm_sensor:
+      name: Next Alarm Sensor
+      description: >
+        The sensor that contains your next alarm time (must have device class 'timestamp').
+        For Android phones, this is typically sensor.PHONE_NAME_next_alarm.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: timestamp
+
+    person_entity:
+      name: Person
+      description: >
+        The person entity to check if home. Lights only turn on if this person
+        is at home when the alarm triggers.
+      selector:
+        entity:
+          domain: person
+
+    lights_target:
+      name: Target Light
+      description: The light or light group to turn on before your alarm.
+      selector:
+        entity:
+          domain: light
+
+    circadian_switch:
+      name: Circadian Lighting Switch
+      description: This switch will be turned off when the ramp starts and back on when it completes or is interrupted.
+      selector:
+        entity:
+          domain: switch
+
+    offset_before_alarm:
+      name: Ramp Start Time
+      description: How many minutes before the alarm should the light start ramping on.
+      default: "-00:10:00"
+      selector:
+        select:
+          options:
+            - label: 1 minutes before
+              value: "-00:01:00"
+            - label: 5 minutes before
+              value: "-00:05:00"
+            - label: 10 minutes before
+              value: "-00:10:00"
+            - label: 15 minutes before
+              value: "-00:15:00"
+            - label: 20 minutes before
+              value: "-00:20:00"
+            - label: 30 minutes before
+              value: "-00:30:00"
+            - label: 45 minutes before
+              value: "-00:45:00"
+            - label: 60 minutes before
+              value: "-01:00:00"
+          mode: dropdown
+
+    brightness_pct:
+      name: Brightness
+      description: The brightness percentage for the lights to ramp up to. (Default 100%)
+      default: 100
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+
+    weekday_selection:
+      name: Active Days
+      description: Choose which days this automation should run.
+      default: "all"
+      selector:
+        select:
+          options:
+            - label: All Days
+              value: all
+            - label: Weekdays Only (Mon-Fri)
+              value: weekdays
+            - label: Weekends Only (Sat-Sun)
+              value: weekends
+          mode: dropdown
+
+mode: single
+max_exceeded: silent
+
+variables:
+  weekday_choice: !input weekday_selection
+  offset_str: !input offset_before_alarm
+  lights_target: !input lights_target
+  brightness_pct: !input brightness_pct
+  alarm_entity: !input alarm_sensor
+
+trigger:
+  - trigger: time
+    at:
+      entity_id: !input alarm_sensor
+      offset: !input offset_before_alarm
+
+condition:
+  - condition: state
+    entity_id: !input person_entity
+    state: home
+  - condition: state
+    entity_id: !input lights_target
+    state: "off"
+  - condition: template
+    value_template: >
+      {% set today = now().weekday() %}
+      {% if weekday_choice == 'all' %}
+        true
+      {% elif weekday_choice == 'weekdays' %}
+        {{ today < 5 }}
+      {% elif weekday_choice == 'weekends' %}
+        {{ today >= 5 }}
+      {% else %}
+        true
+      {% endif %}
+
+action:
+  - action: switch.turn_off
+    target:
+      entity_id: !input circadian_switch
+
+  - action: light.turn_on
+    target:
+      entity_id: !input lights_target
+    data:
+      brightness: 1
+      color_temp_kelvin: 2000
+
+  - variables:
+      final_ramp_fired: false
+
+  # Step 1: ramp to one third
+  - if:
+      - condition: template
+        value_template: >
+          {{ (state_attr(lights_target, 'brightness') | float(0) / 2.55) < (brightness_pct - 5) }}
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: !input lights_target
+        data:
+          brightness_pct: "{{ (brightness_pct / 3) | round }}"
+          transition: 5
+      - delay:
+          seconds: >
+            {% set t = offset_str.lstrip('-').split(':') %}
+            {{ ((t[0] | int * 3600 + t[1] | int * 60 + t[2] | int) * 2 / 3) | int - 5 }}
+
+  # Step 2: ramp to two thirds
+  - if:
+      - condition: template
+        value_template: >
+          {{ (state_attr(lights_target, 'brightness') | float(0) / 2.55) < (brightness_pct - 5)
+             and states(lights_target) != 'off' }}
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: !input lights_target
+        data:
+          brightness_pct: "{{ ((brightness_pct / 3) * 2) | round }}"
+          transition: 5
+      - delay:
+          seconds: >
+            {% set t = offset_str.lstrip('-').split(':') %}
+            {{ ((t[0] | int * 3600 + t[1] | int * 60 + t[2] | int) / 3) | int - 5 }}
+
+  # Step 3: ramp to final brightness
+  - if:
+      - condition: template
+        value_template: >
+          {{ (state_attr(lights_target, 'brightness') | float(0) / 2.55) < (brightness_pct - 5)
+             and states(lights_target) != 'off' }}
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: !input lights_target
+        data:
+          brightness_pct: "{{ brightness_pct }}"
+          transition: 5
+      - variables:
+          final_ramp_fired: true
+
+  # Turn circadian switch back on — wait for alarm time if step 3 completed, otherwise immediately
+  - if:
+      - condition: template
+        value_template: "{{ final_ramp_fired }}"
+    then:
+      - delay:
+          seconds: "{{ [((as_timestamp(states(alarm_entity)) - as_timestamp(now())) | round), 0] | max }}"
+
+  - action: switch.turn_on
+    target:
+      entity_id: !input circadian_switch
